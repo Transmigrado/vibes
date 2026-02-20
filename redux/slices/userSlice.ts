@@ -8,7 +8,7 @@ interface UserState {
 
 const initialState: UserState = {
     user: null,
-    loading: false,
+    loading: true,
     error: null,
 };
 
@@ -31,8 +31,11 @@ const userSlice = createSlice({
         logout: (state) => {
             state.user = null;
         },
+        checkSession: (state) => {
+            state.loading = true;
+        },
     },
 });
 
-export const { loginRequest, loginSuccess, loginFailure, logout } = userSlice.actions;
+export const { loginRequest, loginSuccess, loginFailure, logout, checkSession } = userSlice.actions;
 export default userSlice.reducer;

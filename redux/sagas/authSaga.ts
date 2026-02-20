@@ -1,6 +1,6 @@
 import { call, put, takeLatest } from 'redux-saga/effects';
 import { supabase } from '../../lib/supabase';
-import { loginFailure, loginRequest, loginSuccess } from '../slices/userSlice';
+import { checkSession, loginFailure, loginRequest, loginSuccess } from '../slices/userSlice';
 
 function* handleLogin(action: any): any {
     try {
@@ -19,6 +19,20 @@ function* handleLogin(action: any): any {
     }
 }
 
+function* handleCheckSession(): any {
+    try {
+        const { data: { session }, error } = yield call(() => supabase.auth.getSession());
+        if (session) {
+            yield put(loginSuccess(session.user));
+        } else {
+            yield put(loginFailure('No session'));
+        }
+    } catch (e: any) {
+        yield put(loginFailure(e.message));
+    }
+}
+
 export function* authSaga() {
     yield takeLatest(loginRequest.type, handleLogin);
+    yield takeLatest(checkSession.type, handleCheckSession);
 }
