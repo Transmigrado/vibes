@@ -7,169 +7,241 @@ This document provides guidelines for agentic coding agents working on this code
 - **Type**: Expo/React Native mobile application (iOS/Android/Web)
 - **Language**: TypeScript (strict mode enabled)
 - **Framework**: Expo SDK 54 with expo-router for file-based routing
-- **State Management**: React hooks (useState, useContext, etc.)
-- **Testing**: Not yet configured
+- **State Management**: **Redux Toolkit-style slices OR classic Redux** + **Redux-Saga** (this repo uses Redux + Saga patterns)
+- **Backend**: **Supabase**
+- **Architecture**: **Feature-based** + **Functional Agents** (no classes)
+- **Testing**: Not yet configured (recommended: Jest + jest-expo + @testing-library/react-native)
 
-## Build & Development Commands
+---
 
-### Running the App
+## Non‑Negotiables
 
-```bash
-# Start Expo development server
-npm start          # or: npx expo start
+1. **No TypeScript classes** in agents/business logic.
+2. **No Supabase calls in UI** (components/screens).
+3. **No Supabase calls inside sagas** (sagas call agents only).
+4. **No `any`**. Use `unknown` or proper typing.
+5. **Reducers must be pure** (no side effects, no async).
+6. **Sagas handle side effects** (API calls, storage, navigation effects if needed).
+7. **Agents throw errors**; sagas catch and convert to Redux state.
 
-# Run on specific platforms
-npm run android    # Android emulator
-npm run ios        # iOS simulator
-npm run web        # Web browser
-```
+---
 
-### Linting & Type Checking
-
-```bash
-# Run ESLint (includes TypeScript checking via expo lint)
-npm run lint
-
-# TypeScript strict mode is enforced (see tsconfig.json)
-```
-
-### Testing
-
-**No tests currently exist in this project.** When adding tests, use:
-
-```bash
-# Recommended: Jest (standard with Expo)
-# Run all tests
-npx jest
-
-# Run a single test file
-npx jest path/to/test-file.test.ts
-
-# Run tests matching a pattern
-npx jest --testNamePattern="component name"
-
-# Watch mode
-npx jest --watch
-
-# With coverage
-npx jest --coverage
-```
-
-For React Native/Expo projects, also consider:
-- `jest-expo` - Jest preset for Expo projects
-- `@testing-library/react-native` - Component testing
-
-## Code Style Guidelines
-
-### General Principles
-
-- Use functional components with hooks
-- Prefer composition over inheritance
-- Keep components small and focused
-- Use TypeScript strict mode - no `any` types
-
-### File Organization
+## Recommended Folder Structure
 
 ```
-app/                    # Expo Router pages (file-based routing)
-  (tabs)/               # Tab-based screens
-  _layout.tsx           # Root layout
-  index.tsx             # Home screen
+app/                      # Expo Router pages (file-based routing)
+  (tabs)/
+  _layout.tsx
+  index.tsx
 
-components/             # Reusable UI components
-  ui/                   # UI primitives
-  *.tsx                 # Feature components
+components/               # Reusable UI components
+  ui/
 
-hooks/                  # Custom React hooks
-constants/              # App constants (colors, config)
+store/                    # Redux + Sagas per feature
+  index.ts                # configureStore + rootSaga
+  rootReducer.ts
+  rootSaga.ts
+  auth/
+    auth.types.ts
+    auth.actions.ts
+    auth.reducer.ts
+    auth.selectors.ts
+    auth.sagas.ts
+  profile/
+    ...
+
+agents/                   # Business logic (functional), calls Supabase
+  authAgent.ts
+  profileAgent.ts
+
+services/                 # External clients (supabase client, etc.)
+  supabase.ts
+
+hooks/
+constants/
 ```
 
-### Imports
+---
 
-- Use path aliases (`@/*` maps to root):
-  ```typescript
-  import { useThemeColor } from '@/hooks/use-theme-color';
-  import { Colors } from '@/constants/theme';
-  ```
-- Order imports: external libraries → internal modules → relative paths
-- Group imports with blank lines between groups
+## Architecture Layers & Responsibilities
 
-### Naming Conventions
+### UI Layer (Expo Router screens + components)
+- Render UI and dispatch Redux actions.
+- Select state via selectors/hooks.
+- **Must not** call Supabase or agents directly.
 
-- **Components**: PascalCase (e.g., `HelloWave`, `ThemedText`)
-- **Hooks**: camelCase with `use` prefix (e.g., `useThemeColor`)
-- **Constants**: PascalCase for exported constants (e.g., `Colors`, `Fonts`)
-- **Files**: kebab-case for general files, PascalCase for components
-- **Types/Interfaces**: PascalCase (e.g., `ThemedTextProps`)
+### Redux Layer
+- **Actions**: describe events and intents (e.g., login requested).
+- **Reducers**: pure state transitions.
+- **Sagas**: orchestrate async work and side effects; call agents; dispatch success/failure actions.
 
-### TypeScript Guidelines
+### Agent Layer (Functional Agents)
+- Encapsulates **Supabase** calls and domain logic.
+- Returns typed data.
+- Throws errors with meaningful messages.
 
-- Always define prop types for components:
-  ```typescript
-  export type ThemedTextProps = TextProps & {
-    lightColor?: string;
-    darkColor?: string;
-    type?: 'default' | 'title' | 'defaultSemiBold' | 'subtitle' | 'link';
+### Services Layer
+- Creates and exports the Supabase client once.
+
+---
+
+## Redux + Redux‑Saga Guidelines
+
+### Actions
+- Prefer explicit request/success/failure triplets for async flows.
+- Payloads must be typed.
+- Keep action naming consistent:
+
+Examples:
+- `auth/loginRequest`
+- `auth/loginSuccess`
+- `auth/loginFailure`
+
+### Reducers
+- Must be pure.
+- No calls to agents/services.
+- Keep error and loading state explicit:
+
+Typical shape:
+- `status: 'idle' | 'loading' | 'succeeded' | 'failed'`
+- `error?: string | null`
+- `data?: ...`
+
+### Sagas
+- Use `call`, `put`, `takeLatest`, `select`.
+- **Do**: call agents.
+- **Don’t**: call Supabase directly.
+- Always wrap async flows in `try/catch`.
+- Normalize errors into a user‑safe string.
+
+**Correct**
+```ts
+const data = yield call(authAgent.login, action.payload);
+yield put(authActions.loginSuccess(data));
+```
+
+**Wrong**
+```ts
+const { data } = yield call(supabase.auth.signInWithPassword, action.payload); // ❌
+```
+
+### Root Saga / Feature Sagas
+- Each feature exports a `watchX()` saga.
+- `rootSaga` composes all watchers using `all([...])`.
+
+---
+
+## Supabase Integration Rules
+
+### `services/supabase.ts`
+- Create the client once.
+- Use environment variables for URL and anon key (Expo env strategy).
+
+### Usage
+- Only agents import and use the Supabase client.
+- Never instantiate multiple clients.
+- Never call Supabase in UI or sagas.
+
+---
+
+## Functional Agent Pattern (No Classes)
+
+Agents must be functional and mockable.
+
+### Template
+```ts
+export type SomeAgent = {
+  method: (params: Params) => Promise<Result>;
+};
+
+export const createSomeAgent = (deps?: { supabaseClient?: typeof supabase }): SomeAgent => {
+  const client = deps?.supabaseClient ?? supabase;
+
+  const method: SomeAgent["method"] = async (params) => {
+    const { data, error } = await client.from("table").select("*");
+    if (error) throw new Error(error.message);
+    return data;
   };
-  ```
-- Use explicit return types for complex functions
-- Avoid `any` - use `unknown` if type is truly unknown
 
-### Component Patterns
+  return { method };
+};
 
-- Use `StyleSheet.create` for styles (not inline styles except for dynamic values)
-- Destructure props with defaults
-- Extract reusable logic into custom hooks
-- Use `platformSelect`/`Platform.OS` for platform-specific code
+export const someAgent = createSomeAgent();
+```
 
-### Error Handling
+### Error Handling in Agents
+- Throw `Error` with a clean message.
+- Avoid returning `{ error }` objects.
+- Let sagas decide how to present the message to UI.
 
-- Use try/catch for async operations
-- Display user-friendly error messages in UI
-- Log errors for debugging (avoid console.log in production)
+---
 
-### React Native Specific
+## TypeScript Rules
 
-- Use `react-native-safe-area-context` for safe area handling
-- Use `expo-haptics` for haptic feedback
-- Use `expo-image` for optimized images
-- Use `react-native-reanimated` for animations (worklets required)
+- Strict mode is required.
+- **No `any`**.
+- Use `unknown` when truly unknown, then narrow.
+- Exported functions should have explicit return types when complex.
+- Prefer `type` over `interface` for unions and composition.
 
-### Dark Mode Support
+---
 
-Follow the pattern in `constants/theme.ts`:
-- Define colors in `Colors.light` and `Colors.dark`
-- Use `useThemeColor` hook to get themed colors
-- Props like `lightColor`/`darkColor` allow component-level overrides
+## Imports & Aliases
 
-### ESLint
+- Use path aliases (`@/*`):
+```ts
+import { authAgent } from "@/agents/authAgent";
+import { supabase } from "@/services/supabase";
+```
 
-The project uses `eslint-config-expo` with flat config. Run `npm run lint` before committing.
+- Order imports: external → internal alias → relative.
+- Separate groups with blank lines.
+
+---
 
 ## Common Tasks
 
-### Adding a New Screen
+### Add a New Feature (Redux + Saga + Agent)
+1. Create `store/<feature>/` with `types/actions/reducer/sagas/selectors`.
+2. Create `agents/<feature>Agent.ts` with Supabase calls.
+3. Wire the reducer into `rootReducer`.
+4. Wire the watcher into `rootSaga`.
+5. Use UI screens/components to dispatch request actions and render state.
 
-1. Create `app/screen-name.tsx` (or `app/folder/screen.tsx` for nested routes)
-2. Add `_layout.tsx` if needed for nested navigation
-3. Use existing layout components or create new ones
+### Add a New Screen (expo-router)
+1. Create `app/<route>.tsx` or `app/<folder>/<route>.tsx`.
+2. Use `useDispatch()` to dispatch actions.
+3. Use selectors to read state.
 
-### Adding a New Component
+---
 
-1. Create in appropriate folder under `components/`
-2. Define TypeScript interfaces for props
-3. Use theming hooks for colors
-4. Add styles with `StyleSheet.create`
+## Testing (Recommended Setup)
 
-### Adding a New Hook
+When adding tests, use:
+- `jest`
+- `jest-expo`
+- `@testing-library/react-native`
 
-1. Create in `hooks/` folder
-2. Export function with `use` prefix
-3. Document parameters and return values
+Test focus:
+- Reducers (pure functions)
+- Sagas (mock agents)
+- Agents (inject mock Supabase client via `createXAgent({ supabaseClient })`)
 
-## Additional Resources
+---
 
-- [Expo Documentation](https://docs.expo.dev/)
-- [React Navigation](https://reactnavigation.org/)
-- [Expo Router](https://docs.expo.dev/router/introduction)
-- [React Native Reanimated](https://docs.swmansion.com/react-native-reanimated/)
+## Performance & UX
+
+- Prefer memoized selectors for derived data.
+- Avoid heavy computations in components.
+- Keep lists optimized (`FlashList` if needed).
+- Use `expo-image` for efficient image rendering.
+- Use `react-native-reanimated` for animations.
+
+---
+
+## Dark Mode
+
+Follow the pattern in `constants/theme.ts`:
+- Define colors in `Colors.light` and `Colors.dark`
+- Use `useThemeColor` hook
+- Allow component overrides via `lightColor` / `darkColor`
